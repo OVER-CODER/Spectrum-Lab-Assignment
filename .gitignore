@@ -1,0 +1,22 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Matplotlib cache
+**/.mplconfig/
+
+# Virtual environments
+**/.venv/
+.venv/
+
+# Generated training / evaluation artifacts
+Programming_Assignment_1/model/
+Programming_Assignment_1/log/
+Programming_Assignment_1/result/
+Programming_Assignment_2/outputs/
