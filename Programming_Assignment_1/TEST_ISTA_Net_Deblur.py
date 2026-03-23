@@ -129,10 +129,34 @@ model_dir = "./%s/ISTA_Net_Deblur_layer_%d_lr_%.4f" % (args.model_dir, layer_num
 model_path = os.path.join(model_dir, f'net_params_{epoch_num}.pkl')
 
 if not os.path.exists(model_path):
-    print(f"Error: Model not found at {model_path}")
-    exit(1)
+    import glob as glob_module
+    
+    best_model_dir = "./%s/Best Model/ISTA_Net_Deblur_layer_%d_lr_%.4f" % (args.model_dir, layer_num, learning_rate)
+    best_model_path = os.path.join(best_model_dir, f'net_params_{epoch_num}.pkl')
+    if os.path.exists(best_model_path):
+        model_path = best_model_path
+        model_dir = best_model_dir
+        print(f"Found model in Best Model directory")
+    else:
+        possible_models = glob_module.glob("./%s/ISTA_Net_Deblur_layer_%d_lr_%.4f*" % (args.model_dir, layer_num, learning_rate))
+        if possible_models:
+            model_dir = possible_models[0]
+            model_path = os.path.join(model_dir, f'net_params_{epoch_num}.pkl')
+            print(f"Using alternative model directory: {model_dir}")
+    
+    if not os.path.exists(model_path):
+        print(f"Error: Model not found at {model_path}")
+        print(f"Looking for: layer={layer_num}, learning_rate={learning_rate}, epoch={epoch_num}")
+        # List available models
+        available = glob_module.glob("./%s/*/net_params_*.pkl" % args.model_dir)
+        if available:
+            print("Available models:")
+            for m in sorted(available)[:5]:
+                print(f"  {m}")
+        exit(1)
 
-model.load_state_dict(torch.load(model_path, map_location=device))
+state_dict = torch.load(model_path, map_location=device)
+model.load_state_dict(state_dict)
 print(f"Loaded model from {model_path}")
 model.eval()
 
