@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import argparse
+import csv
 
 os.environ.setdefault("MPLCONFIGDIR", str(Path(".mplconfig").resolve()))
 
@@ -36,9 +37,9 @@ def parse_args():
     parser.add_argument("--num-iters", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--max-images", type=int, default=8)
+    parser.add_argument("--max-images", type=int, default=-1, help="Max images to evaluate (-1 for all)")
     parser.add_argument("--device", type=str, default=default_device)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
@@ -79,12 +80,10 @@ def downsample(x, scale=2):
 
 
 def apply_H(x, kernel, scale=2):
-    # Hx = S(Bx): blur, then decimate
     return downsample(apply_blur(x, kernel), scale=scale)
 
 
 def upsample_adjoint(y, scale=2, output_size=(256, 256)):
-    # S^T y: insert zeros at sampled locations, exact transpose of slicing
     b, c, _, _ = y.shape
     out = torch.zeros((b, c, output_size[0], output_size[1]), device=y.device, dtype=y.dtype)
     out[:, :, ::scale, ::scale] = y
@@ -98,17 +97,7 @@ def apply_transpose_blur(x, kernel):
 
 
 def apply_HT(y, kernel, scale=2, output_size=(256, 256)):
-    # H^T y = B^T(S^T y)
     return apply_transpose_blur(upsample_adjoint(y, scale=scale, output_size=output_size), kernel)
-
-
-def verify_adjoint(device, kernel, crop_size, scale):
-    x = torch.randn(1, 3, crop_size, crop_size, device=device)
-    z = torch.randn(1, 3, crop_size // scale, crop_size // scale, device=device)
-    lhs = torch.sum(apply_H(x, kernel, scale=scale) * z)
-    rhs = torch.sum(x * apply_HT(z, kernel, scale=scale, output_size=(crop_size, crop_size)))
-    error = abs(lhs.item() - rhs.item())
-    print(f"Adjoint check |<Hx,z> - <x,H^Tz>| = {error:.6e}")
 
 
 def get_denoiser(device, denoiser_name):
@@ -178,7 +167,7 @@ def compute_batch_metrics(x_batch, gt_batch):
 
 
 def run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args):
-    x = F.interpolate(y, scale_factor=args.scale, mode="nearest")
+    x = F.interpolate(y, scale_factor=args.scale, mode="bicubic", align_corners=False).clamp(0, 1)
     history = {"psnr": [], "ssim": [], "residual": [], "eta": [], "sigma": []}
 
     for k in range(args.num_iters):
@@ -186,7 +175,6 @@ def run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args):
         eta_k = float(eta_schedule[k])
         sigma_k = float(sigma_schedule[k])
 
-        # z_{k+1} = x_k - eta * H^T(Hx_k - y)
         grad = apply_HT(
             apply_H(x, kernel, scale=args.scale) - y,
             kernel,
@@ -194,8 +182,6 @@ def run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args):
             output_size=(args.crop_size, args.crop_size),
         )
         z = x - eta_k * grad
-
-        # x_{k+1} = D_theta(z_{k+1}, sigma_k)
         x = torch.clamp(denoiser(z, sigma_k), 0.0, 1.0)
 
         residual = torch.norm(x - x_prev).item() / float(x.shape[0])
@@ -209,42 +195,79 @@ def run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args):
     return x, history
 
 
-def plot_curves(history, output_dir):
+def plot_curves(history, output_dir, denoiser):
     iterations = np.arange(1, len(history["psnr"]) + 1)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
-    axes[0].plot(iterations, history["psnr"], marker="o")
-    axes[0].set_title("PSNR vs iteration")
+    axes[0].plot(iterations, history["psnr"], marker="o", color="blue")
+    axes[0].set_title("Average PSNR vs iteration")
     axes[0].set_xlabel("Iteration")
-    axes[0].set_ylabel("PSNR")
+    axes[0].set_ylabel("PSNR (dB)")
+    axes[0].grid(True, linestyle="--", alpha=0.6)
 
-    axes[1].plot(iterations, history["ssim"], marker="o")
-    axes[1].set_title("SSIM vs iteration")
+    axes[1].plot(iterations, history["ssim"], marker="o", color="green")
+    axes[1].set_title("Average SSIM vs iteration")
     axes[1].set_xlabel("Iteration")
     axes[1].set_ylabel("SSIM")
+    axes[1].grid(True, linestyle="--", alpha=0.6)
 
-    axes[2].plot(iterations, history["residual"], marker="o")
-    axes[2].set_title("Residual vs iteration")
+    axes[2].plot(iterations, history["residual"], marker="o", color="red")
+    axes[2].set_title("Average Residual vs iteration")
     axes[2].set_xlabel("Iteration")
     axes[2].set_ylabel(r"$\|x_k - x_{k-1}\|$")
+    axes[2].grid(True, linestyle="--", alpha=0.6)
 
     fig.tight_layout()
-    fig.savefig(output_dir / "pnp_convergence.png", dpi=150)
+    fig.savefig(output_dir / f"pnp_convergence_{denoiser}.png", dpi=150)
     plt.close(fig)
 
 
-def plot_images(lr, recon, gt, output_dir):
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    axes[0].imshow(tensor_to_image(lr))
-    axes[0].set_title("Input (LR noisy)")
-    axes[1].imshow(tensor_to_image(recon))
-    axes[1].set_title("PnP reconstruction")
-    axes[2].imshow(tensor_to_image(gt))
-    axes[2].set_title("Ground truth")
-    for ax in axes:
-        ax.axis("off")
+def plot_distribution(psnr_base, ssim_base, psnr_recon, ssim_recon, output_dir, denoiser):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    axes[0].hist(psnr_base, bins=15, alpha=0.5, label='Bicubic Baseline', color='red')
+    axes[0].hist(psnr_recon, bins=15, alpha=0.5, label='PnP Recon', color='blue')
+    axes[0].set_title(f"PSNR Distribution ({denoiser})", fontsize=13, fontweight='bold')
+    axes[0].set_xlabel("PSNR (dB)")
+    axes[0].set_ylabel("Frequency")
+    axes[0].legend()
+    axes[0].grid(True, linestyle="--", alpha=0.4)
+
+    axes[1].hist(ssim_base, bins=15, alpha=0.5, label='Bicubic Baseline', color='orange')
+    axes[1].hist(ssim_recon, bins=15, alpha=0.5, label='PnP Recon', color='green')
+    axes[1].set_title(f"SSIM Distribution ({denoiser})", fontsize=13, fontweight='bold')
+    axes[1].set_xlabel("SSIM")
+    axes[1].set_ylabel("Frequency")
+    axes[1].legend()
+    axes[1].grid(True, linestyle="--", alpha=0.4)
+
     fig.tight_layout()
-    fig.savefig(output_dir / "pnp_reconstruction.png", dpi=150)
+    fig.savefig(output_dir / f"pnp_distribution_{denoiser}.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_comprehensive_comparison(saved_images, output_dir, denoiser):
+    n = len(saved_images)
+    if n == 0:
+        return
+    fig, axes = plt.subplots(n, 3, figsize=(12, 3.5 * n))
+    if n == 1:
+        axes = [axes]
+    
+    for i, (lr, recon, gt, name, p_base, s_base, p_rec, s_rec) in enumerate(saved_images):
+        axes[i][0].imshow(tensor_to_image(lr))
+        axes[i][0].set_title(f"Bicubic (Baseline)\nPSNR: {p_base:.2f}dB | SSIM: {s_base:.4f}")
+        axes[i][0].axis("off")
+        
+        axes[i][1].imshow(tensor_to_image(recon))
+        axes[i][1].set_title(f"PnP Recon ({denoiser})\nPSNR: {p_rec:.2f}dB | SSIM: {s_rec:.4f}")
+        axes[i][1].axis("off")
+        
+        axes[i][2].imshow(tensor_to_image(gt))
+        axes[i][2].set_title(f"Ground Truth\n({name})")
+        axes[i][2].axis("off")
+
+    fig.suptitle(f'Comprehensive Visual Comparison ({denoiser})', fontsize=16, fontweight='bold', y=0.99)
+    fig.tight_layout()
+    fig.savefig(output_dir / f"pnp_comprehensive_{denoiser}.png", dpi=150, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -264,63 +287,91 @@ def main():
     dataset = CBSD500Dataset(args.data_dir, args.crop_size)
     if args.max_images > 0:
         dataset.files = dataset.files[: args.max_images]
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-    )
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     device = torch.device(args.device)
     kernel = box_kernel(device)
-    verify_adjoint(device, kernel, args.crop_size, args.scale)
     eta_schedule = build_schedule(args.num_iters, args.step_size, args.step_size_end, args.schedule)
     sigma_schedule = build_schedule(args.num_iters, args.denoiser_std, args.denoiser_std_end, args.schedule)
     denoiser = get_denoiser(device, args.denoiser)
 
     avg_history = {"psnr": np.zeros(args.num_iters), "ssim": np.zeros(args.num_iters), "residual": np.zeros(args.num_iters)}
-    final_psnr = []
-    final_ssim = []
-    saved_triplet = None
+    
+    baseline_psnr_list, baseline_ssim_list = [], []
+    final_psnr_list, final_ssim_list = [], []
+    
+    saved_images = []
+    
+    csv_file = output_dir / f"per_image_metrics_{args.denoiser}.csv"
+    with open(csv_file, "w", newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["image_name", "bicubic_psnr", "bicubic_ssim", "recon_psnr", "recon_ssim"])
+        
+        for gt, name in loader:
+            gt = gt.to(device)
+            y = apply_H(gt, kernel, scale=args.scale)
+            y = add_noise(y, args.noise_std)
+            
+            # Baseline: Bicubic upsampling
+            y_bicubic = F.interpolate(y, scale_factor=args.scale, mode="bicubic", align_corners=False).clamp(0, 1)
+            b_psnr, b_ssim = compute_batch_metrics(y_bicubic, gt)
+            baseline_psnr_list.append(b_psnr)
+            baseline_ssim_list.append(b_ssim)
 
-    for gt, name in loader:
-        gt = gt.to(device)
-        print(f"Processing {name[0]} ...")
+            recon, history = run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args)
 
-        y = apply_H(gt, kernel, scale=args.scale)
-        y = add_noise(y, args.noise_std)
+            avg_history["psnr"] += np.array(history["psnr"])
+            avg_history["ssim"] += np.array(history["ssim"])
+            avg_history["residual"] += np.array(history["residual"])
+            
+            f_psnr = history["psnr"][-1]
+            f_ssim = history["ssim"][-1]
+            final_psnr_list.append(f_psnr)
+            final_ssim_list.append(f_ssim)
+            
+            writer.writerow([name[0], b_psnr, b_ssim, f_psnr, f_ssim])
+            print(f"Processed {name[0]:20s} | Base PSNR/SSIM: {b_psnr:.2f}/{b_ssim:.4f} | Recon PSNR/SSIM: {f_psnr:.2f}/{f_ssim:.4f}")
+            
+            if len(saved_images) < 6:
+                saved_images.append((y_bicubic[0].cpu(), recon[0].cpu(), gt[0].cpu(), name[0], b_psnr, b_ssim, f_psnr, f_ssim))
 
-        recon, history = run_pnp(y, gt, kernel, denoiser, eta_schedule, sigma_schedule, args)
-
-        avg_history["psnr"] += np.array(history["psnr"])
-        avg_history["ssim"] += np.array(history["ssim"])
-        avg_history["residual"] += np.array(history["residual"])
-        final_psnr.append(history["psnr"][-1])
-        final_ssim.append(history["ssim"][-1])
-
-        if saved_triplet is None:
-            lr_vis = F.interpolate(y, scale_factor=args.scale, mode="nearest")
-            saved_triplet = (lr_vis[0].cpu(), recon[0].cpu(), gt[0].cpu(), name[0])
-
-    num_images = len(final_psnr)
+    num_images = len(final_psnr_list)
     avg_history = {k: (v / max(num_images, 1)).tolist() for k, v in avg_history.items()}
 
-    plot_curves(avg_history, output_dir)
-    if saved_triplet is not None:
-        lr_vis, recon_vis, gt_vis, sample_name = saved_triplet
-        plot_images(lr_vis, recon_vis, gt_vis, output_dir)
-        print(f"Saved sample visualization for {sample_name} to {output_dir / 'pnp_reconstruction.png'}")
-
-    print(f"Final average PSNR: {np.mean(final_psnr):.4f} dB")
-    print(f"Final average SSIM: {np.mean(final_ssim):.4f}")
-    if len(eta_schedule) > 0 and len(sigma_schedule) > 0:
-        print(
-            "Schedule used: "
-            f"eta [{eta_schedule[0]:.4f} -> {eta_schedule[-1]:.4f}], "
-            f"sigma [{sigma_schedule[0]:.4f} -> {sigma_schedule[-1]:.4f}] ({args.schedule})"
-        )
-    print(f"Saved convergence plot to {output_dir / 'pnp_convergence.png'}")
-
+    plot_curves(avg_history, output_dir, args.denoiser)
+    plot_distribution(baseline_psnr_list, baseline_ssim_list, final_psnr_list, final_ssim_list, output_dir, args.denoiser)
+    plot_comprehensive_comparison(saved_images, output_dir, args.denoiser)
+    
+    # Text summary
+    summary_file = output_dir / f"evaluation_summary_{args.denoiser}.txt"
+    with open(summary_file, "w") as f:
+        f.write(f"PnP Super-Resolution Evaluation Summary\n")
+        f.write(f"=======================================\n")
+        f.write(f"Denoiser: {args.denoiser}\n")
+        f.write(f"Number of test images: {num_images}\n")
+        f.write(f"\nBaseline (Bicubic Interpolation):\n")
+        f.write(f"  Average PSNR: {np.mean(baseline_psnr_list):.4f} dB\n")
+        f.write(f"  Average SSIM: {np.mean(baseline_ssim_list):.4f}\n")
+        f.write(f"\nPnP Reconstruction:\n")
+        f.write(f"  Average PSNR: {np.mean(final_psnr_list):.4f} dB\n")
+        f.write(f"  Average SSIM: {np.mean(final_ssim_list):.4f}\n")
+        f.write(f"\nImprovement:\n")
+        f.write(f"  Delta PSNR: {np.mean(final_psnr_list) - np.mean(baseline_psnr_list):+.4f} dB\n")
+        f.write(f"  Delta SSIM: {np.mean(final_ssim_list) - np.mean(baseline_ssim_list):+.4f}\n")
+        f.write(f"\nSaved Visualization Assets:\n")
+        f.write(f"  - pnp_convergence_{args.denoiser}.png\n")
+        f.write(f"  - pnp_distribution_{args.denoiser}.png\n")
+        f.write(f"  - pnp_comprehensive_{args.denoiser}.png\n")
+    
+    print("\n" + "="*50)
+    print(f"Final Evaluation for {args.denoiser}")
+    print("="*50)
+    print(f"Baseline Average PSNR: {np.mean(baseline_psnr_list):.4f} dB,  SSIM: {np.mean(baseline_ssim_list):.4f}")
+    print(f"Recon Average PSNR:    {np.mean(final_psnr_list):.4f} dB,  SSIM: {np.mean(final_ssim_list):.4f}")
+    print(f"Improvement PSNR:      {np.mean(final_psnr_list) - np.mean(baseline_psnr_list):+.4f} dB")
+    print(f"Improvement SSIM:      {np.mean(final_ssim_list) - np.mean(baseline_ssim_list):+.4f}")
+    print("==================================================")
+    print(f"Saved evaluation summaries to {output_dir}")
 
 if __name__ == "__main__":
     main()
