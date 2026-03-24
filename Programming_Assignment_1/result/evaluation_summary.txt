@@ -1,0 +1,37 @@
+ISTA-Net Deblurring Evaluation
+Epoch: 50
+Layer Num: 10
+Number of test images: 25
+Average PSNR: 21.6686 dB
+Average SSIM: 0.4182
+Average Blurred PSNR: 21.4592 dB
+Average Blurred SSIM: 0.4036
+Delta PSNR (Recon-Blur): 0.2093 dB
+Delta SSIM (Recon-Blur): 0.0147
+
+Per-image results:
+Image 1: PSNR = 23.1391 dB, SSIM = 0.3782
+Image 2: PSNR = 19.4592 dB, SSIM = 0.4056
+Image 3: PSNR = 23.9856 dB, SSIM = 0.3876
+Image 4: PSNR = 21.9716 dB, SSIM = 0.4080
+Image 5: PSNR = 19.5759 dB, SSIM = 0.4116
+Image 6: PSNR = 19.4900 dB, SSIM = 0.2922
+Image 7: PSNR = 18.2054 dB, SSIM = 0.3832
+Image 8: PSNR = 20.5481 dB, SSIM = 0.4626
+Image 9: PSNR = 24.4762 dB, SSIM = 0.4401
+Image 10: PSNR = 21.7805 dB, SSIM = 0.4297
+Image 11: PSNR = 22.8983 dB, SSIM = 0.4514
+Image 12: PSNR = 23.7739 dB, SSIM = 0.4326
+Image 13: PSNR = 22.9864 dB, SSIM = 0.4216
+Image 14: PSNR = 23.4269 dB, SSIM = 0.4849
+Image 15: PSNR = 23.6760 dB, SSIM = 0.5045
+Image 16: PSNR = 22.6687 dB, SSIM = 0.3719
+Image 17: PSNR = 20.6416 dB, SSIM = 0.3981
+Image 18: PSNR = 21.5260 dB, SSIM = 0.3729
+Image 19: PSNR = 19.2619 dB, SSIM = 0.3525
+Image 20: PSNR = 18.8703 dB, SSIM = 0.4579
+Image 21: PSNR = 21.2112 dB, SSIM = 0.5747
+Image 22: PSNR = 21.4218 dB, SSIM = 0.4729
+Image 23: PSNR = 24.2002 dB, SSIM = 0.3647
+Image 24: PSNR = 21.7637 dB, SSIM = 0.4384
+Image 25: PSNR = 20.7554 dB, SSIM = 0.3583

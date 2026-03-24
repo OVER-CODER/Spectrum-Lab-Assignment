@@ -18,5 +18,5 @@ Thumbs.db
 # Generated training / evaluation artifacts
 Programming_Assignment_1/model/
 Programming_Assignment_1/log/
-Programming_Assignment_1/result/
-Programming_Assignment_2/outputs/
+# Programming_Assignment_1/result/
+# Programming_Assignment_2/outputs/
