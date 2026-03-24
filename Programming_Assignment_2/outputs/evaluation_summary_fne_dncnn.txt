@@ -1,0 +1,21 @@
+PnP Super-Resolution Evaluation Summary
+=======================================
+Denoiser: fne_dncnn
+Number of test images: 200
+
+Baseline (Bicubic Interpolation):
+  Average PSNR: 24.7481 dB
+  Average SSIM: 0.7627
+
+PnP Reconstruction:
+  Average PSNR: 26.7197 dB
+  Average SSIM: 0.8156
+
+Improvement:
+  Delta PSNR: +1.9716 dB
+  Delta SSIM: +0.0529
+
+Saved Visualization Assets:
+  - pnp_convergence_fne_dncnn.png
+  - pnp_distribution_fne_dncnn.png
+  - pnp_comprehensive_fne_dncnn.png
